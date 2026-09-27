@@ -1,0 +1,4 @@
+# 工作流与 shell 脚本强制 LF，避免云端解释器/执行器读取时受 CRLF 影响
+*.yml text eol=lf
+*.sh  text eol=lf
+*.py  text eol=lf

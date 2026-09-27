@@ -1,0 +1,97 @@
+name: Buddy 加油站每日任务
+
+# 每天定时跑一次：签到 + 派猫猫旅行闭环。
+# 运行结论看运行日志与 Step Summary（本项目不发任何通知）。
+# 约定：cron 一律用 UTC（北京时间 = UTC+8）
+#   01:30 UTC == 09:30 北京时间
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  # 手动触发，便于首次跑通验证 / dry-run 演练
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只读演练（不发任何写请求）"
+        type: boolean
+        default: false
+      location:
+        description: "指定派遣地点 1=咖啡馆 2=商场店铺 3=健身房 4=古镇客栈（留空随机）"
+        required: false
+        default: ""
+
+# 默认授予最小权限；本流程不需要写仓库内容
+permissions:
+  contents: read
+
+# 避免上次没跑完又叠加一次
+concurrency:
+  group: buddy-station-daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 仅允许仓库本人触发：定时 / 外部定时服务（用本人 PAT 派发，actor 仍是本人）/ 本人在 Actions 页手动运行。
+    # 本工作流会消耗账号签到与派遣积分，若日后改为公开仓库，别人手动派发也会被这一条挡住。
+    # 注意：`schedule` 事件必须显式放行 —— 定时触发时 actor 的取值不应作为准入前提，
+    # 否则一旦 GitHub 给定时运行代入别的 actor，守卫会把定时全部挡掉（静默不跑，极难排查）。
+    if: github.event_name == 'schedule' || github.actor == 'moongilkim-ctrl'
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      # 解释器路径不写死版本号：用 command -v 动态解析
+      - name: 解析 Python 解释器
+        id: py
+        run: |
+          set -euo pipefail
+          PY="$(command -v python3 || command -v python || true)"
+          if [ -z "$PY" ]; then
+            echo "::error::运行器上找不到 python3 / python"
+            exit 1
+          fi
+          echo "解释器：$PY ($($PY --version 2>&1))"
+          echo "path=$PY" >> "$GITHUB_OUTPUT"
+
+      - name: 校验凭证是否存在（不打印内容）
+        env:
+          WORKBUDDY_TOKEN: ${{ secrets.WORKBUDDY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WORKBUDDY_TOKEN:-}" ]; then
+            echo "::error::缺少 Secret WORKBUDDY_TOKEN。请在本机执行 python3 scripts/export_token.py --push-to-secret"
+            exit 1
+          fi
+          echo "已读取 Secret WORKBUDDY_TOKEN（长度 ${#WORKBUDDY_TOKEN}，内容不回显）"
+
+      - name: 签到 + 派猫猫旅行
+        id: run
+        env:
+          # 只从 Secret 读取；云端不依赖任何本机登录态，也不写任何凭证文件
+          WORKBUDDY_TOKEN: ${{ secrets.WORKBUDDY_TOKEN }}
+          WORKBUDDY_DOMAIN: ${{ secrets.WORKBUDDY_DOMAIN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          LOCATION: ${{ inputs.location }}
+        run: |
+          set -uo pipefail
+          ARGS=()
+          if [ "${DRY_RUN:-false}" = "true" ]; then ARGS+=(--dry-run); fi
+          if [ -n "${LOCATION:-}" ]; then ARGS+=(--location "${LOCATION}"); fi
+
+          # 退出码只由签到决定：猫猫失败不影响签到结论（脚本内部已保证）
+          if [ ${#ARGS[@]} -gt 0 ]; then
+            "${{ steps.py.outputs.path }}" scripts/buddy_station_cloud.py "${ARGS[@]}" --json-out result.json
+          else
+            "${{ steps.py.outputs.path }}" scripts/buddy_station_cloud.py --json-out result.json
+          fi
+
+      - name: 上传运行结果（便于排查）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buddy-station-result
+          path: result.json
+          if-no-files-found: ignore
+          retention-days: 14

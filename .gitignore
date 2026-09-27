@@ -1,0 +1,17 @@
+# 凭证与运行产物一律不入库
+.env
+*.env
+result.json
+.env.sh
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 编译缓存
+*.pyc
+
+# 提交信息临时文件
+.commitmsg

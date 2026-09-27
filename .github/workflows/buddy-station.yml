@@ -3,10 +3,10 @@ name: Buddy 加油站每日任务
 # 每天定时跑一次：签到 + 派猫猫旅行闭环。
 # 运行结论看运行日志与 Step Summary（本项目不发任何通知）。
 # 约定：cron 一律用 UTC（北京时间 = UTC+8）
-#   01:30 UTC == 09:30 北京时间
+#   23:00 UTC == 次日 07:00 北京时间
 on:
   schedule:
-    - cron: "30 1 * * *"
+    - cron: "0 23 * * *"
   # 手动触发，便于首次跑通验证 / dry-run 演练
   workflow_dispatch:
     inputs:

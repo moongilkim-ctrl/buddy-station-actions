@@ -11,6 +11,37 @@
 
 ---
 
+## 零、当前配置状态（2026-09-27 已落地 ✅）
+
+| 项 | 值 |
+|---|---|
+| 服务 | cron-job.org |
+| 任务 ID | `8522176` |
+| 任务名 | `Buddy加油站每日签到` |
+| 触发时间 | **每天 09:30（Asia/Shanghai）**，crontab `30 9 * * *` |
+| 请求方法 | `POST` |
+| 请求体 | `{"ref":"main"}` |
+| 状态 | 已启用；`TEST RUN` 实测返回 **`204`**，GitHub 运行 `36306857072` → `success` |
+| 下次执行 | 2026-09-28 09:30（北京时间） |
+| 失败通知 | 已开（连续失败 1 次即通知） |
+
+已配置的 4 条请求头（**`Content-Type` 必须是 `application/json`**）：
+
+```
+Authorization: Bearer <细粒度PAT>
+Accept: application/vnd.github+json
+X-GitHub-Api-Version: 2022-11-28
+Content-Type: application/json
+```
+
+> ⚠️ **易踩的坑**：用 cron-job.org 的 `IMPORT FROM CURL` 导入时，它会自动补一条
+> `Content-Type: application/x-www-form-urlencoded`，**必须手动改成 `application/json`**，
+> 否则 GitHub 侧行为异常。导入后务必切到 ADVANCED 页逐条核对。
+>
+> 本机私钥（不在仓库内）：`~/.workbuddy/secrets/buddy-station-cron.pat`（`chmod 600`）。
+
+---
+
 ## 一、先创建细粒度 PAT（一次授权）
 
 用**细粒度令牌**（Fine-grained token）而非经典令牌，把权限压到最小：
@@ -42,6 +73,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
   -H "Authorization: Bearer $GH_CRON_PAT" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
+  -H "Content-Type: application/json" \
   "https://api.github.com/repos/moongilkim-ctrl/buddy-station-actions/actions/workflows/buddy-station.yml/dispatches" \
   -d '{"ref":"main"}'
 ```
@@ -75,13 +107,18 @@ python3 scripts/trigger_dispatch.py
 | Schedule | 每天 `09:30`，时区选 **Asia/Shanghai**（北京时间） |
 | Request method | `POST` |
 
-3. **Advanced → Headers** 添加三条：
+3. **Advanced → Headers** 添加四条：
 
 ```
 Authorization: Bearer <你的PAT>
 Accept: application/vnd.github+json
 X-GitHub-Api-Version: 2022-11-28
+Content-Type: application/json
 ```
+
+> 💡 更快的做法：Advanced 页有 **`IMPORT FROM CURL`**，把第二节那条 curl 整行粘进去，
+> URL / 方法 / 请求头 / body 会一次填好。但**导入后必须把自动补的
+> `Content-Type: application/x-www-form-urlencoded` 改成 `application/json`**。
 
 4. **Advanced → Request body** 填：
 

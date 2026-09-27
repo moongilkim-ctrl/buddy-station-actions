@@ -18,11 +18,11 @@
 | 服务 | cron-job.org |
 | 任务 ID | `8522176` |
 | 任务名 | `Buddy加油站每日签到` |
-| 触发时间 | **每天 09:30（Asia/Shanghai）**，crontab `30 9 * * *` |
+| 触发时间 | **每天 07:00（Asia/Shanghai）**，crontab `0 7 * * *` |
 | 请求方法 | `POST` |
 | 请求体 | `{"ref":"main"}` |
 | 状态 | 已启用；`TEST RUN` 实测返回 **`204`**，GitHub 运行 `36306857072` → `success` |
-| 下次执行 | 2026-09-28 09:30（北京时间） |
+| 下次执行 | 2026-09-28 07:00（北京时间） |
 | 失败通知 | 已开（连续失败 1 次即通知） |
 
 已配置的 4 条请求头（**`Content-Type` 必须是 `application/json`**）：
@@ -102,9 +102,9 @@ python3 scripts/trigger_dispatch.py
 
 | 字段 | 值 |
 |---|---|
-| Title | `Buddy 加油站日报` |
+| Title | `Buddy加油站每日签到` |
 | URL | `https://api.github.com/repos/moongilkim-ctrl/buddy-station-actions/actions/workflows/buddy-station.yml/dispatches` |
-| Schedule | 每天 `09:30`，时区选 **Asia/Shanghai**（北京时间） |
+| Schedule | 每天 `07:00`，时区选 **Asia/Shanghai**（北京时间） |
 | Request method | `POST` |
 
 3. **Advanced → Headers** 添加四条：
@@ -163,5 +163,5 @@ Content-Type: application/json
 >   `workflow_dispatch` 秒级成功。同期 `nodejs/node` 等第三方仓库 schedule 正常。
 > - 判定：**账号级 schedule 投递失效**，非仓库配置问题。
 > - 因此**外部 cron 是本项目当前唯一的可靠定时方案，必须配置**。
-> - 工作流内保留 `cron: "30 1 * * *"`（UTC）= 每天 09:30 北京时间，作为 GitHub 恢复后的自动兜底。
-> - 外部服务建议时间同样设为**每天 09:30（Asia/Shanghai）**。
+> - 工作流内保留 `cron: "0 23 * * *"`（UTC）= 每天 07:00 北京时间，作为 GitHub 恢复后的自动兜底。
+> - 外部服务时间同步设为**每天 07:00（Asia/Shanghai）**。

@@ -34,7 +34,8 @@
 > 而 `workflow_dispatch` 秒级正常；同期第三方仓库（`nodejs/node`、`home-assistant/core`）
 > 的 schedule 正常触发 → 判定为**账号级投递失效**，与仓库可见性、cron 写法、仓库配置均无关。
 > **因此本项目当前由外部 cron 服务调 dispatch 接口驱动定时**，配置见 `scripts/setup_external_cron.md`。
-> 仓库内保留 `cron: "30 1 * * *"`，待 GitHub 恢复后原生定时会自动接手（两者并存不冲突，接口幂等）。
+> 仓库内保留 `cron: "0 23 * * *"`（= 次日 07:00 北京时间），待 GitHub 恢复后原生定时会自动接手
+> （两者并存不冲突，接口幂等）。
 
 ### 0. 登录 gh（一次性）
 
@@ -117,7 +118,7 @@ python3 scripts/keep_token_fresh.py --install-task   # 注册本机计划任务�
 
 ## 定时
 
-目标节奏：**每天 09:30 北京时间**（工作流内声明 `30 1 * * *` = UTC 01:30）。
+目标节奏：**每天 07:00 北京时间**（工作流内声明 `0 23 * * *` = UTC 前一日 23:00）。
 
 ### 现状：原生 `schedule` 不投递，改由外部 cron 驱动
 
@@ -148,7 +149,7 @@ gh api "repos/nodejs/node/actions/runs?event=schedule&per_page=1" --jq '.workflo
 
 ### 当前方案：外部 cron 调 dispatch 接口（必须配置）
 
-由外部定时服务每天 09:30（北京时间）POST 一次 dispatch 接口，绕过失效的原生调度器。
+由外部定时服务每天 07:00（北京时间）POST 一次 dispatch 接口，绕过失效的原生调度器。
 完整步骤见 **`scripts/setup_external_cron.md`**，要点：
 
 1. 建**细粒度 PAT**（仅本仓库 `Actions: Read and write`）

@@ -6,7 +6,7 @@ name: Buddy 加油站每日任务
 #   01:30 UTC == 09:30 北京时间
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "30 1 * * *"
   # 手动触发，便于首次跑通验证 / dry-run 演练
   workflow_dispatch:
     inputs:

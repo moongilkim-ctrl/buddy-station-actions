@@ -26,7 +26,7 @@
 ## 部署
 
 > **本次已部署完成**：公开仓库 `moongilkim-ctrl/buddy-station-actions`，
-> Secret `WORKBUDDY_TOKEN` / `WORKBUDDY_DOMAIN` 已写入，命令行触发与定时均已跑通。
+> Secret `WORKBUDDY_TOKEN` / `WORKBUDDY_DOMAIN` 已写入，命令行触发与手动运行均已跑通。
 > 其余步骤保留供换机 / 重建时使用。
 >
 > **仓库为何是 Public**：免费个人账号的**私有**仓库**不触发** `schedule` 定时器（平台限制）。

@@ -25,13 +25,16 @@
 
 ## 部署
 
-> **本次已部署完成**：公开仓库 `moongilkim-ctrl/buddy-station-actions`，
+> **本次已部署完成**：仓库 `moongilkim-ctrl/buddy-station-actions`，
 > Secret `WORKBUDDY_TOKEN` / `WORKBUDDY_DOMAIN` 已写入，命令行触发与手动运行均已跑通。
 > 其余步骤保留供换机 / 重建时使用。
 >
-> **仓库为何是 Public**：免费个人账号的**私有**仓库**不触发** `schedule` 定时器（平台限制）。
-> 要让 GitHub 原生定时生效，只有两条路——升 GitHub Pro，或把仓库设为 Public。
-> 本仓库已按「公开 + 零密钥 + 仅本人可触发」加固，见下节《定时》。
+> ⚠️ **定时机制现状（2026-09-27 实测）**：**GitHub 原生 `schedule` 当前不投递** ——
+> 本账号下所有仓库（含新建的公开隔离仓库）`event=schedule` 计数恒为 **0**，
+> 而 `workflow_dispatch` 秒级正常；同期第三方仓库（`nodejs/node`、`home-assistant/core`）
+> 的 schedule 正常触发 → 判定为**账号级投递失效**，与仓库可见性、cron 写法、仓库配置均无关。
+> **因此本项目当前由外部 cron 服务调 dispatch 接口驱动定时**，配置见 `scripts/setup_external_cron.md`。
+> 仓库内保留 `cron: "30 1 * * *"`，待 GitHub 恢复后原生定时会自动接手（两者并存不冲突，接口幂等）。
 
 ### 0. 登录 gh（一次性）
 
@@ -61,7 +64,7 @@ git remote add origin https://github.com/<owner>/buddy-station-actions.git
 git push -u origin main
 ```
 
-仓库设为 **Public** 以启用原生定时（原因见下节）。为降低公开带来的暴露面，已做四项加固：
+仓库保持 **Public**（纯工具类代码，无密钥）。为降低公开带来的暴露面，已做四项加固：
 
 1. **零密钥**：token 只存仓库 Secret，源码不含任何密钥。
 2. **仅本人可触发**：工作流带 `if: github.event_name == 'schedule' || github.actor == '<owner>'` 守卫。
@@ -70,7 +73,8 @@ git push -u origin main
 3. **历史干净**：仓库以单次提交重建（`--orphan`），提交作者用 GitHub 匿名邮箱，旧历史（含真实邮箱）已彻底清除。
 4. **产物脱敏**：`result.json` 落盘前统一脱敏（见文末加固清单）。
 
-> 若你更希望保持私有，则需 **GitHub Pro（$4/月）** 或改用外部定时服务调用 dispatch 接口（见《定时》）。
+> 可见性与定时无关：本账号的 schedule 投递失效已实测对公开仓库同样成立，转公开 / 升 Pro 都无效，
+> 需改由外部定时服务调用 dispatch 接口（见《定时》）。
 
 ### 2. 注入凭证到 Secret
 
@@ -113,51 +117,56 @@ python3 scripts/keep_token_fresh.py --install-task   # 注册本机计划任务�
 
 ## 定时
 
-工作流内声明 `30 1 * * *`（UTC）= **每天 09:30 北京时间**，由 GitHub 原生 `schedule` 触发。
-前提是**仓库为 Public**（或账号是 GitHub Pro）。
+目标节奏：**每天 09:30 北京时间**（工作流内声明 `30 1 * * *` = UTC 01:30）。
 
-### 关键坑：私有仓库 + 免费账号，`schedule` 根本不触发
+### 现状：原生 `schedule` 不投递，改由外部 cron 驱动
 
-这是 GitHub 一条**没有写进官方文档**的限制：免费个人账号的**私有**仓库，`schedule` 事件被平台禁用。
-症状极具迷惑性——工作流状态显示 `active`、cron 语法正确、文件在默认分支上、手动触发一切正常，
-**但定时永远不跑**，界面上也只显示 `workflow_dispatch` 这一个触发器。
-
-实测记录（本仓库改造前）：
+**2026-09-27 实测结论：本账号的 GitHub 原生 `schedule` 事件不投递**（账号级故障，非仓库配置问题）。
 
 | 项 | 结果 |
 |---|---|
-| 账号套餐 | GitHub Free（个人） |
-| 仓库可见性 | Private |
-| `schedule` 事件运行数 | **0**（全部运行都是手动 `workflow_dispatch`） |
-| 对照实验 | 临时 `*/7 * * * *` 探测工作流，23 分钟 **0 次**触发 |
+| 本账号仓库（公开 `buddy-station-actions`） | `schedule` 运行数 **0** |
+| 本账号新建公开隔离仓库（无守卫、`*/5`） | `schedule` 运行数 **0** |
+| 第三方参照仓库 `nodejs/node` / `home-assistant/core` | **正常触发**（分钟级频率） |
+| `workflow_dispatch`（本账号） | **秒级成功** |
+| 判定 | 平台调度服务健康 → 故障在本账号侧（**账号级投递失效**） |
+
+> ⚠️ 重要：**可见性与这件事无关**。此前「免费私有仓库不触发」的说法已被实测否定——
+> 转 Public 后 `schedule` 依然恒为 0。转公开 / 升 Pro **都不是解**，别再在这上面花时间。
+> 社区同类账号级案例见 discussion #205984 / #207211。
 
 **判定定时是否真的生效，只看这一条命令**（`active` 与 UI 上的触发器图标都不可信）：
 
 ```bash
-gh api repos/<owner>/<repo>/actions/runs?event=schedule -q '.total_count'   # 必须 > 0
+# 本仓库：必须 > 0 才算原生定时可用
+gh api "repos/<owner>/<repo>/actions/runs?per_page=100" \
+  --jq '[.workflow_runs[]|select(.event=="schedule")]|length'
+
+# 参照仓库（不属于你）：有近期时间戳 = 平台服务是好的，问题在你账号
+gh api "repos/nodejs/node/actions/runs?event=schedule&per_page=1" --jq '.workflow_runs[0].created_at'
 ```
 
-三条出路，本仓库选第 1 条：
+### 当前方案：外部 cron 调 dispatch 接口（必须配置）
 
-| 方案 | 代价 | 说明 |
-|---|---|---|
-| **① 仓库设为 Public** | 免费 | 本仓库采用。需先做「零密钥 + 仅本人可触发」加固 |
-| ② 升级 GitHub Pro | $4/月 | 保持私有且支持原生定时，最省心 |
-| ③ 外部 cron 服务 | 免费但易静默失效 | 仓库保持私有，由第三方按点调 dispatch 接口。见 `scripts/setup_external_cron.md` |
+由外部定时服务每天 09:30（北京时间）POST 一次 dispatch 接口，绕过失效的原生调度器。
+完整步骤见 **`scripts/setup_external_cron.md`**，要点：
 
-> 补充：新加/改动 cron 后，GitHub 最长可能需要 **15–60 分钟**才注册；等不到不要急着判定失败。
-> 另：公开仓库若 **60 天无任何提交活动**，定时会被平台自动停用（有提交即恢复）。
-
-### 备选：外部定时服务 + `workflow_dispatch`
-
-若日后改回私有仓库，由外部 cron 服务按点调用 GitHub 的 dispatch 接口即可，运行效果与原生定时一致。
-配置步骤见 `scripts/setup_external_cron.md`：创建**细粒度 PAT**（仅本仓库 `Actions: Read and write`），
-在 cron-job.org 建任务，每天 09:30（北京时间）POST
-`https://api.github.com/repos/<owner>/<repo>/actions/workflows/buddy-station.yml/dispatches`，
-Body `{"ref":"main"}`，Header `Authorization: Bearer <PAT>` 与 `Accept: application/vnd.github+json`。
+1. 建**细粒度 PAT**（仅本仓库 `Actions: Read and write`）
+2. 在 cron-job.org 建任务：POST
+   `https://api.github.com/repos/<owner>/<repo>/actions/workflows/buddy-station.yml/dispatches`
+   Body `{"ref":"main"}`，Header `Authorization: Bearer <PAT>`、`Accept: application/vnd.github+json`
+3. 期望返回 **204**，并在 Actions 页面看到新的 `workflow_dispatch` 运行
 
 > 安全提示：PAT 只授予单一仓库的 Actions 写权限，泄露影响面被限制在「能触发本仓库工作流」。
 > 请勿使用 `repo` 全权经典令牌。
+
+> 工作流内保留原生 `cron` 声明：**一旦 GitHub 恢复投递，原生定时会自动接手**。
+> 两者并存不会冲突——签到与派遣接口本身幂等，`concurrency` 亦会串行化，不会重复扣次。
+
+### 其他失效原因（已排除，供日后核对）
+
+> 工作流文件不在默认分支、cron 间隔 < 5 分钟、`@daily` 等别名（GitHub 不支持）、
+> 公开仓库 60 天无提交被自动禁用、整点 UTC 高负载延迟乃至丢弃（可把分钟偏移到 `:23` 这类非整点值）。
 
 ## 手动验证
 

@@ -229,6 +229,8 @@ buddy-station-actions/
 | 是否可能被他人触发消耗积分 | ✅ `if: github.event_name == 'schedule' \|\| github.actor == '<owner>'` 守卫 |
 | 运行产物是否含敏感数据 | ✅ 落盘前统一脱敏（积分/记录 ID/域名/邮箱格式串/原始报文全部抹除） |
 
-> **重点提醒**：公开仓库的 workflow artifact **任何人都能匿名下载**（实测 API 返回 200）。
-> 因此 `result.json` 在写盘前必须过一遍 `sanitize_for_output()`——这一步很容易被忽略，
-> 一旦漏掉，账号资产与个人标识就会随 artifact 公开，抵消掉源码侧的全部清理。
+> **重点提醒**：公开仓库的 artifact **列表元数据匿名可见**（实测 `GET /actions/artifacts` 返回 200），
+> 下载 zip 需认证（`GET /actions/artifacts/<id>/zip` 返回 401）。
+> 但既然仓库公开，就不该假设 artifact 永远私有 —— 因此 `result.json` 在写盘前必须先过一遍
+> `sanitize_for_output()`。这一步很容易被忽略，一旦漏掉，账号资产与个人标识就会随 artifact 外流，
+> 抵消掉源码侧的全部清理。

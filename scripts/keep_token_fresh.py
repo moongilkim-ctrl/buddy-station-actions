@@ -205,10 +205,12 @@ def main() -> int:
     print("  登录态      : %s" % path)
     print("  accessToken : %s" % fp)
     print("  有效期      : %s" % token_expiry(token))
-    rtx = auth.get("refreshToken") or ""
-    if rtx:
+    rtx = auth.get("refreshToken")
+    if isinstance(rtx, str) and rtx:
         print("  refreshToken: %s（有效期 %s）"
               % (token_fingerprint(rtx), token_expiry(rtx)))
+    elif isinstance(rtx, dict):
+        print("  refreshToken: （加密信封，本脚本不使用）")
     last_fp = state.get("fingerprint", "")
     last_at = state.get("pushed_at", 0)
     print("  上次同步    : %s"

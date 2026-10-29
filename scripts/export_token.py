@@ -69,11 +69,56 @@ def find_login_state() -> str | None:
     return None
 
 
+# ===== 加密登录态支持（WorkBuddy 5.6.2+）=====
+# 客户端 5.6.2+ 起把 auth.accessToken 由明文 JWT 改为 AES-256-GCM 信封：
+#   {"$wbEncrypted": 1, "envelope": "<base64>"}
+# 解密需要本机 atRestSecretKey（配置为 required 后仅驻留客户端进程内存或本机密钥文件）。
+# 本脚本不重复实现该解密（含多路径密钥发现），而是复用本机已安装的
+# 「WorkBuddy 积分助手」技能脚本中的读端实现 decrypt_access_token_field()。
+SKILL_SCRIPT_GLOBS = [
+    os.path.join(os.path.expanduser("~"), ".workbuddy", "skills",
+                 "*", "scripts", "buddy_station.py"),
+]
+
+
+def _load_skill_decryptor():
+    """动态加载技能脚本中的 decrypt_access_token_field；找不到返回 None。"""
+    import glob
+    import importlib.util
+    for pattern in SKILL_SCRIPT_GLOBS:
+        for script in sorted(glob.glob(pattern)):
+            try:
+                spec = importlib.util.spec_from_file_location("_wb_skill_station", script)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)  # 顶层无副作用，仅定义函数/常量
+                fn = getattr(module, "decrypt_access_token_field", None)
+                if callable(fn):
+                    return fn
+            except Exception:  # noqa: BLE001
+                continue
+    return None
+
+
+def _decode_access_token(raw):
+    """明文 JWT 原样返回；加密信封则委托技能脚本解密。"""
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, dict) and raw.get("$wbEncrypted") == 1:
+        fn = _load_skill_decryptor()
+        if fn is None:
+            raise SystemExit(
+                "登录态为 WorkBuddy 5.6.2+ 加密格式，但本机未找到可用的解密实现。\n"
+                "请确认已安装「WorkBuddy积分助手」技能"
+                "（提供 decrypt_access_token_field 的脚本）。")
+        return fn(raw)
+    raise SystemExit("登录态里的 accessToken 字段格式无法识别。")
+
+
 def load_token(path: str) -> tuple[str, str, dict]:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     auth = data.get("auth", {}) or {}
-    token = (auth.get("accessToken") or "").strip()
+    token = _decode_access_token(auth.get("accessToken"))
     domain = (auth.get("domain") or "").strip()
     if not token:
         raise SystemExit("登录态里没有 accessToken，请先在 WorkBuddy 客户端登录。")

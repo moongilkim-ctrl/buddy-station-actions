@@ -54,6 +54,10 @@ TRAVEL_CONFIG_PATH = "/activity/growth/buddy/travel/config"
 TRAVEL_CLAIM_PATH = "/activity/growth/buddy/travel/claim"
 TRAVEL_DEPART_PATH = "/activity/growth/buddy/travel/depart"
 
+# 活跃地图（连登 7/14/28 天档位）
+STREAK_PATH = "/v2/activity/growth/streak"
+REDEEM_PATH = "/v2/activity/growth/redeem"
+
 TRAVEL_STATE_TEXT = {
     "idle": "空闲（可派遣）",
     "traveling": "旅行中",
@@ -321,6 +325,78 @@ def travel_auto(token: str, location_id: int | None = None, dry_run: bool = Fals
     }
 
 
+# ===== 活跃地图（连登档位兑换）=====
+# 兑换请求体尚未从官方页面校准：2026-10-29 实测 {"tier":"7d"} 等写法均返回 400
+# invalid redemption request（当月三档均已兑换，无法实测成功路径）。
+# 因此按候选顺序尝试，首个 code==0 即成功，并把命中的写法写进日志，便于后续固化。
+REDEEM_PAYLOAD_BUILDERS = (
+    lambda tier: {"tier": tier},
+    lambda tier: {"tier": tier, "type": "streak"},
+    lambda tier: {"tier": "tier_" + tier},
+    lambda tier: {"tier_code": tier},
+)
+
+
+def streak_get(token: str) -> dict | None:
+    status, body = api_call(TRAVEL_DOMAIN, token, STREAK_PATH, method="GET", label="⑦ 活跃地图状态")
+    if status != 200 or not isinstance(body, dict) or body.get("code") != 0:
+        return None
+    return body.get("data") or {}
+
+
+def redeem_tier(token: str, tier: str, dry_run: bool = False) -> dict:
+    if dry_run:
+        return {"ok": True, "action": "dry_run", "tier": tier, "message": "dry-run：已跳过兑换 %s 档" % tier}
+    last = None
+    for build in REDEEM_PAYLOAD_BUILDERS:
+        payload = build(tier)
+        status, body = api_call(TRAVEL_DOMAIN, token, REDEEM_PATH, method="POST",
+                                payload=payload, label="⑧ 兑换 %s 档（写）" % tier)
+        code = body.get("code") if isinstance(body, dict) else None
+        if status == 200 and code == 0:
+            return {"ok": True, "action": "claimed", "tier": tier, "payload": payload,
+                    "data": body.get("data"),
+                    "message": "✅ 已兑换 %s 档（命中写法 %s）"
+                               % (tier, json.dumps(payload, ensure_ascii=False))}
+        last = {"ok": False, "action": "failed", "tier": tier, "code": code,
+                "message": redact(body.get("msg")) if isinstance(body, dict) else ("HTTP %s" % status)}
+    return last or {"ok": False, "action": "failed", "tier": tier, "message": "无可用请求体"}
+
+
+def streak_auto(token: str, dry_run: bool = False) -> dict:
+    """活跃地图：7/14/28 天档位，未兑换且已达标就兑换（失败不影响签到结论）。"""
+    log: list[str] = []
+    data = streak_get(token)
+    if data is None:
+        return {"ok": False, "available": False, "log": ["查询活跃地图失败，已跳过兑换"]}
+
+    streak = data.get("streak") or {}
+    days = streak.get("days") or 0
+    rstatus = data.get("redemption_status") or {}
+    claimed: list[dict] = []
+
+    for item in rstatus.get("tiers") or []:
+        tier = item.get("tier")
+        need = item.get("days") or 0
+        if not tier:
+            continue
+        state = rstatus.get("tier_%s_status" % tier)
+        if state == "claimed":
+            log.append("%s 档本月已兑换（%s 次）" % (tier, rstatus.get("tier_%s_count" % tier)))
+            continue
+        if days < need:
+            log.append("%s 档未达标（连续 %s / %s 天）" % (tier, days, need))
+            continue
+        result = redeem_tier(token, tier, dry_run=dry_run)
+        log.append(result.get("message") or result.get("action"))
+        if result.get("action") == "claimed":
+            claimed.append(result)
+
+    return {"ok": True, "available": True, "days": days,
+            "makeup_cards": (data.get("makeup_cards") or {}).get("balance"),
+            "claimed": claimed, "log": log}
+
+
 # ===== 主流程 =====
 def write_step_summary(text: str) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -379,7 +455,14 @@ def main() -> int:
     if not travel.get("ok"):
         print("[travel] ⚠️ 猫猫环节失败，但按约定不影响签到结论", file=sys.stderr)
 
-    # ---- 三、落盘与汇总 ----
+    # ---- 三、活跃地图档位兑换（失败不影响签到结论）----
+    streak = streak_auto(token, dry_run=args.dry_run)
+    for line in streak.get("log") or []:
+        print("[streak] " + str(line))
+    if not streak.get("ok"):
+        print("[streak] ⚠️ 活跃地图环节失败，不影响签到结论", file=sys.stderr)
+
+    # ---- 四、落盘与汇总 ----
     raw_calls = RAW_CALLS
     payload = {
         "day": day,
@@ -387,6 +470,7 @@ def main() -> int:
         "domain": domain,
         "checkin": {k: v for k, v in checkin.items() if k != "data"},
         "travel": {k: v for k, v in travel.items() if k != "final"},
+        "streak": streak,
         "raw_calls": raw_calls,
         "interfaces": {
             "status": "POST /v2/billing/meter/checkin-activity-status",
@@ -413,14 +497,20 @@ def main() -> int:
     # 运行结论写进 GitHub Step Summary：在 Actions 页面即可看到当天结果
     write_step_summary("## %s · Buddy 加油站每日任务\n\n"
                        "| 环节 | 结论 | 说明 |\n|---|---|---|\n"
-                       "| 签到 | %s | %s |\n| 猫猫旅行 | %s | %s |\n"
+                       "| 签到 | %s | %s |\n| 猫猫旅行 | %s | %s |\n| 活跃地图 | %s | %s |\n"
                        % (day, sign_txt, str(checkin.get("message"))[:60],
                           "✅ 正常" if travel.get("ok") else "❌ 异常",
-                          "；".join(str(x) for x in (travel.get("log") or []))[:120]))
-    print("[summary] 签到 %s · 猫猫 %s" % (sign_txt, "正常" if travel.get("ok") else "异常"))
+                          "；".join(str(x) for x in (travel.get("log") or []))[:120],
+                          "✅ 正常" if streak.get("ok") else "❌ 异常",
+                          "；".join(str(x) for x in (streak.get("log") or []))[:120]))
+    print("[summary] 签到 %s · 猫猫 %s · 活跃地图 %s"
+          % (sign_txt, "正常" if travel.get("ok") else "异常",
+             "正常" if streak.get("ok") else "异常"))
 
     set_output("checkin_status", str(checkin.get("action")))
     set_output("travel_status", "ok" if travel.get("ok") else "failed")
+    set_output("streak_status", "ok" if streak.get("ok") else "failed")
+    set_output("streak_claimed", str(len(streak.get("claimed") or [])))
 
     # 退出码只由签到决定：签到成功/已签 = 成功；猫猫失败不影响
     return 0 if checkin.get("ok") else 1

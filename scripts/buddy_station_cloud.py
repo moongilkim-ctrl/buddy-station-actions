@@ -58,6 +58,9 @@ TRAVEL_DEPART_PATH = "/activity/growth/buddy/travel/depart"
 # 活跃地图（连登 7/14/28 天档位）
 STREAK_PATH = "/v2/activity/growth/streak"
 REDEEM_PATH = "/v2/activity/growth/redeem"
+# 限时连登抽奖（档位兑换会送抽奖次数）
+LOTTERY_CHANCES_PATH = "/activity/growth/lottery/chances"
+LOTTERY_DRAW_PATH = "/activity/growth/lottery/draw"
 
 TRAVEL_STATE_TEXT = {
     "idle": "空闲（可派遣）",
@@ -390,6 +393,37 @@ def streak_auto(token: str, dry_run: bool = False) -> dict:
             "claimed": claimed, "log": log}
 
 
+def lottery_auto(token: str, dry_run: bool = False, max_draws: int = 5) -> dict:
+    """限时连登抽奖：有次数就抽掉（档位兑换会发抽奖次数，当天不用会累积）。"""
+    try:
+        status, body = api_call(TRAVEL_DOMAIN, token, LOTTERY_CHANCES_PATH, method="GET", label="⑨ 抽奖次数")
+        chances = ((body.get("data") or {}).get("balance") or 0) if isinstance(body, dict) else 0
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "available": False, "log": ["查询抽奖次数失败，已跳过抽奖"]}
+
+    if not chances:
+        return {"ok": True, "available": True, "chances": 0, "log": ["无抽奖次数，跳过"]}
+    if dry_run:
+        return {"ok": True, "available": True, "chances": chances,
+                "log": ["dry-run：有 %d 次抽奖机会，未执行" % chances]}
+
+    log, prizes = [], []
+    for _ in range(min(int(chances), max_draws)):
+        st, body = api_call(TRAVEL_DOMAIN, token, LOTTERY_DRAW_PATH, method="POST",
+                            payload={"client_token": str(uuid.uuid4())}, label="⑩ 抽奖（写）")
+        if st == 200 and isinstance(body, dict) and body.get("code") == 0:
+            data = body.get("data") or {}
+            prizes.append({"prize_name": data.get("prize_name"),
+                           "prize_type": data.get("prize_type"),
+                           "credit_amount": data.get("credit_amount")})
+            log.append("抽中 %s" % (data.get("prize_name") or "?"))
+        else:
+            log.append("抽奖失败：%s" % (redact(body.get("msg")) if isinstance(body, dict)
+                                      else "HTTP %s" % st))
+            break
+    return {"ok": True, "available": True, "chances": chances, "prizes": prizes, "log": log}
+
+
 # ===== 主流程 =====
 def write_step_summary(text: str) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -455,7 +489,14 @@ def main() -> int:
     if not streak.get("ok"):
         print("[streak] ⚠️ 活跃地图环节失败，不影响签到结论", file=sys.stderr)
 
-    # ---- 四、落盘与汇总 ----
+    # ---- 四、限时连登抽奖（失败不影响签到结论）----
+    lottery = lottery_auto(token, dry_run=args.dry_run)
+    for line in lottery.get("log") or []:
+        print("[lottery] " + str(line))
+    if not lottery.get("ok"):
+        print("[lottery] ⚠️ 抽奖环节失败，不影响签到结论", file=sys.stderr)
+
+    # ---- 五、落盘与汇总 ----
     raw_calls = RAW_CALLS
     payload = {
         "day": day,
@@ -464,6 +505,7 @@ def main() -> int:
         "checkin": {k: v for k, v in checkin.items() if k != "data"},
         "travel": {k: v for k, v in travel.items() if k != "final"},
         "streak": streak,
+        "lottery": lottery,
         "raw_calls": raw_calls,
         "interfaces": {
             "status": "POST /v2/billing/meter/checkin-activity-status",
@@ -490,20 +532,24 @@ def main() -> int:
     # 运行结论写进 GitHub Step Summary：在 Actions 页面即可看到当天结果
     write_step_summary("## %s · Buddy 加油站每日任务\n\n"
                        "| 环节 | 结论 | 说明 |\n|---|---|---|\n"
-                       "| 签到 | %s | %s |\n| 猫猫旅行 | %s | %s |\n| 活跃地图 | %s | %s |\n"
+                       "| 签到 | %s | %s |\n| 猫猫旅行 | %s | %s |\n| 活跃地图 | %s | %s |\n| 连登抽奖 | %s | %s |\n"
                        % (day, sign_txt, str(checkin.get("message"))[:60],
                           "✅ 正常" if travel.get("ok") else "❌ 异常",
                           "；".join(str(x) for x in (travel.get("log") or []))[:120],
                           "✅ 正常" if streak.get("ok") else "❌ 异常",
-                          "；".join(str(x) for x in (streak.get("log") or []))[:120]))
-    print("[summary] 签到 %s · 猫猫 %s · 活跃地图 %s"
+                          "；".join(str(x) for x in (streak.get("log") or []))[:120],
+                          "✅ 正常" if lottery.get("ok") else "❌ 异常",
+                          "；".join(str(x) for x in (lottery.get("log") or []))[:120]))
+    print("[summary] 签到 %s · 猫猫 %s · 活跃地图 %s · 抽奖 %s"
           % (sign_txt, "正常" if travel.get("ok") else "异常",
-             "正常" if streak.get("ok") else "异常"))
+             "正常" if streak.get("ok") else "异常",
+             "正常" if lottery.get("ok") else "异常"))
 
     set_output("checkin_status", str(checkin.get("action")))
     set_output("travel_status", "ok" if travel.get("ok") else "failed")
     set_output("streak_status", "ok" if streak.get("ok") else "failed")
     set_output("streak_claimed", str(len(streak.get("claimed") or [])))
+    set_output("lottery_prizes", str(len(lottery.get("prizes") or [])))
 
     # 退出码只由签到决定：签到成功/已签 = 成功；猫猫失败不影响
     return 0 if checkin.get("ok") else 1

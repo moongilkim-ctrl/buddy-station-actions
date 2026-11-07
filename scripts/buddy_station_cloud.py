@@ -41,6 +41,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone, timedelta
 
 # ===== 接口常量（真实路径，实测确认）=====
@@ -326,15 +327,9 @@ def travel_auto(token: str, location_id: int | None = None, dry_run: bool = Fals
 
 
 # ===== 活跃地图（连登档位兑换）=====
-# 兑换请求体尚未从官方页面校准：2026-10-29 实测 {"tier":"7d"} 等写法均返回 400
-# invalid redemption request（当月三档均已兑换，无法实测成功路径）。
-# 因此按候选顺序尝试，首个 code==0 即成功，并把命中的写法写进日志，便于后续固化。
-REDEEM_PAYLOAD_BUILDERS = (
-    lambda tier: {"tier": tier},
-    lambda tier: {"tier": tier, "type": "streak"},
-    lambda tier: {"tier": "tier_" + tier},
-    lambda tier: {"tier_code": tier},
-)
+# 请求体已从官方前端确认（assets.workbuddy.cn 的 growth chunk）：
+#   POST /activity/growth/redeem   {"tier": "7d"|"14d"|"28d", "client_token": <uuid4>}
+# client_token 是幂等键，每次新生成；缺它会返回 400 invalid redemption request（2026-11-07 实测）。
 
 
 def streak_get(token: str) -> dict | None:
@@ -347,20 +342,18 @@ def streak_get(token: str) -> dict | None:
 def redeem_tier(token: str, tier: str, dry_run: bool = False) -> dict:
     if dry_run:
         return {"ok": True, "action": "dry_run", "tier": tier, "message": "dry-run：已跳过兑换 %s 档" % tier}
-    last = None
-    for build in REDEEM_PAYLOAD_BUILDERS:
-        payload = build(tier)
-        status, body = api_call(TRAVEL_DOMAIN, token, REDEEM_PATH, method="POST",
-                                payload=payload, label="⑧ 兑换 %s 档（写）" % tier)
-        code = body.get("code") if isinstance(body, dict) else None
-        if status == 200 and code == 0:
-            return {"ok": True, "action": "claimed", "tier": tier, "payload": payload,
-                    "data": body.get("data"),
-                    "message": "✅ 已兑换 %s 档（命中写法 %s）"
-                               % (tier, json.dumps(payload, ensure_ascii=False))}
-        last = {"ok": False, "action": "failed", "tier": tier, "code": code,
-                "message": redact(body.get("msg")) if isinstance(body, dict) else ("HTTP %s" % status)}
-    return last or {"ok": False, "action": "failed", "tier": tier, "message": "无可用请求体"}
+    payload = {"tier": tier, "client_token": str(uuid.uuid4())}
+    status, body = api_call(TRAVEL_DOMAIN, token, REDEEM_PATH, method="POST",
+                            payload=payload, label="⑧ 兑换 %s 档（写）" % tier)
+    code = body.get("code") if isinstance(body, dict) else None
+    if status == 200 and code == 0:
+        return {"ok": True, "action": "claimed", "tier": tier, "data": body.get("data"),
+                "message": "✅ 已兑换 %s 档" % tier}
+    if code == 409:  # 该档位本月已兑换
+        return {"ok": True, "action": "skipped", "tier": tier,
+                "message": "%s 档本月已兑换（跳过）" % tier}
+    return {"ok": False, "action": "failed", "tier": tier, "code": code,
+            "message": redact(body.get("msg")) if isinstance(body, dict) else ("HTTP %s" % status)}
 
 
 def streak_auto(token: str, dry_run: bool = False) -> dict:

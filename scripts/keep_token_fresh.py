@@ -237,6 +237,7 @@ def main() -> int:
                       "repo": repo, "expiry": token_expiry(token)})
         write_state(state)
         print("\n  ✅ 已同步到 %s 的 Secret %s" % (repo or "当前仓库", SECRET_NAME))
+        print("  ⚠️ 顺带检查 cron-job.org 用的细粒度 PAT：它不可续期，到期前需重建并替换 Authorization 头")
         return 0
     return 1
 

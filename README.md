@@ -91,7 +91,8 @@ python3 scripts/export_token.py --push-to-secret   # 读本机登录态 → 写�
 该脚本只把 token 通过 **stdin 管道**交给 `gh secret set`，不落盘、不进命令行参数、不进 git。
 默认只打印指纹（长度 + 首尾 4 位）与有效期，要看全文需显式加 `--reveal`。
 
-> **token 有效期**：accessToken 是 JWT，无法自动续期。到期后重跑一次上面的命令刷新 Secret 即可。
+> **token 有效期**：accessToken 是 JWT，无法自动续期；客户端约每日滚动刷新，**单枚有效期 28 天**
+> （2026-11-19 同步后到期日 **2026-12-17**）。每次同步都会顺延到期日；
 > 脚本每次运行都会打印剩余天数；过期后签到会失败，运行日志与 Step Summary 里会看到「签到失败」，便于察觉。
 
 #### 让 Secret 自动保持新鲜（推荐）
